@@ -11,24 +11,33 @@
  *	on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License
  *	for the specific language governing permissions and limitations under the License.
  */
+
+import groovy.json.JsonOutput
 import physicalgraph.zigbee.zcl.DataType
 
 metadata {
 	definition(name: "ZigBee Window Shade", namespace: "smartthings", author: "SmartThings", ocfDeviceType: "oic.d.blind", mnmn: "SmartThings", vid: "generic-shade") {
 		capability "Actuator"
+		capability "Battery"
 		capability "Configuration"
 		capability "Refresh"
 		capability "Window Shade"
+		capability "Window Shade Preset"
 		capability "Health Check"
 		capability "Switch Level"
 
 		command "pause"
 
-		fingerprint profileId: "0104", inClusters: "0000, 0003, 0004, 0102", outClusters: "0019", model: "E2B0-KR000Z0-HA", deviceJoinName: "SOMFY Blind Controller/eZEX" // SY-IoT201-BD
-		fingerprint profileId: "0104", inClusters: "0000, 0003, 0004, 0005, 0006, 0008, 0102", outClusters: "000A", manufacturer: "Feibit Co.Ltd", model: "FTB56-ZT218AK1.6", deviceJoinName: "Wistar Curtain Motor(CMJ)"
-		fingerprint profileId: "0104", inClusters: "0000, 0003, 0004, 0005, 0006, 0008, 0102", outClusters: "000A", manufacturer: "Feibit Co.Ltd", model: "FTB56-ZT218AK1.8", deviceJoinName: "Wistar Curtain Motor(CMJ)"
-		fingerprint profileId: "0104", inClusters: "0000, 0003, 0004, 0005, 0102", outClusters: "0003", manufacturer: "REXENSE", model: "DY0010", deviceJoinName: "Smart Curtain Motor(DT82TV)"
-		fingerprint manufacturer: "IKEA of Sweden", model: "KADRILJ roller blind", deviceJoinName: "IKEA Kadrilj Roller Blind" // raw description 01 0104 0202 00 09 0000 0001 0003 0004 0005 0020 0102 1000 FC7C 02 0019 1000
+		fingerprint profileId: "0104", inClusters: "0000, 0003, 0004, 0102", outClusters: "0019", model: "E2B0-KR000Z0-HA", deviceJoinName: "eZEX Window Treatment" // SY-IoT201-BD //SOMFY Blind Controller/eZEX
+		fingerprint profileId: "0104", inClusters: "0000, 0003, 0004, 0005, 0006, 0008, 0102", outClusters: "000A", manufacturer: "Feibit Co.Ltd", model: "FTB56-ZT218AK1.6", deviceJoinName: "Wistar Window Treatment" //Wistar Curtain Motor(CMJ)
+		fingerprint profileId: "0104", inClusters: "0000, 0003, 0004, 0005, 0006, 0008, 0102", outClusters: "000A", manufacturer: "Feibit Co.Ltd", model: "FTB56-ZT218AK1.8", deviceJoinName: "Wistar Window Treatment" //Wistar Curtain Motor(CMJ)
+		fingerprint profileId: "0104", inClusters: "0000, 0003, 0004, 0005, 0102", outClusters: "0003", manufacturer: "REXENSE", model: "KG0001", deviceJoinName: "Window Treatment" //Smart Curtain Motor(BCM300D)
+		fingerprint profileId: "0104", inClusters: "0000, 0003, 0004, 0005, 0102", outClusters: "0003", manufacturer: "REXENSE", model: "DY0010", deviceJoinName: "Window Treatment" //Smart Curtain Motor(DT82TV)
+		fingerprint profileId: "0104", inClusters: "0000, 0003, 0004, 0005, 0102", outClusters: "0003", manufacturer: "SOMFY", model: "Glydea Somfy", deviceJoinName: "Somfy Window Treatment" //Somfy Glydea Ultra
+	}
+
+	preferences {
+		input "preset", "number", title: "Preset position", description: "Set the window shade preset position", defaultValue: 50, range: "1..100", required: false, displayDuringSetup: false
 	}
 
 	tiles(scale: 2) {
@@ -44,6 +53,9 @@ metadata {
 		standardTile("contPause", "device.switch", inactiveLabel: false, decoration: "flat", width: 2, height: 2) {
 			state "pause", label:"", icon:'st.sonos.pause-btn', action:'pause', backgroundColor:"#cccccc"
 		}
+		standardTile("presetPosition", "device.presetPosition", width: 2, height: 2, decoration: "flat") {
+			state "default", label: "Preset", action:"presetPosition", icon:"st.Home.home2"
+		}
 		standardTile("refresh", "device.refresh", inactiveLabel: false, decoration: "flat", width: 2, height: 1) {
 			state "default", label:"", action:"refresh.refresh", icon:"st.secondary.refresh"
 		}
@@ -55,7 +67,7 @@ metadata {
 		}
 
 		main "windowShade"
-		details(["windowShade", "contPause", "shadeLevel", "levelSliderControl", "refresh"])
+		details(["windowShade", "contPause", "presetPosition", "shadeLevel", "levelSliderControl", "refresh"])
 	}
 }
 
@@ -67,6 +79,7 @@ private getCOMMAND_GOTO_LIFT_PERCENTAGE() { 0x05 }
 private getATTRIBUTE_POSITION_LIFT() { 0x0008 }
 private getATTRIBUTE_CURRENT_LEVEL() { 0x0000 }
 private getCOMMAND_MOVE_LEVEL_ONOFF() { 0x04 }
+private getBATTERY_PERCENTAGE_REMAINING() { 0x0021 }
 
 private List<Map> collectAttributes(Map descMap) {
 	List<Map> descMaps = new ArrayList<Map>()
@@ -103,6 +116,9 @@ def parse(String description) {
 			def valueInt = Math.round((zigbee.convertHexToInt(descMap.value)) / 255 * 100)
 
 			levelEventHandler(valueInt)
+		} else if (reportsBatteryPercentage() && descMap?.clusterInt == zigbee.POWER_CONFIGURATION_CLUSTER && zigbee.convertHexToInt(descMap?.attrId) == BATTERY_PERCENTAGE_REMAINING && descMap.value) {
+			def batteryLevel = zigbee.convertHexToInt(descMap.value)
+			batteryPercentageEventHandler(batteryLevel)
 		}
 	}
 }
@@ -132,6 +148,13 @@ def updateFinalState() {
 	log.debug "updateFinalState: ${level}"
 	if (level > 0 && level < 100) {
 		sendEvent(name: "windowShade", value: "partially open")
+	}
+}
+
+def batteryPercentageEventHandler(batteryLevel) {
+	if (batteryLevel != null) {
+		batteryLevel = Math.min(100, Math.max(0, batteryLevel))
+		sendEvent([name: "battery", value: batteryLevel, unit: "%", descriptionText: "{{ device.displayName }} battery was {{ value }}%"])
 	}
 }
 
@@ -170,6 +193,10 @@ def pause() {
 	zigbee.command(CLUSTER_WINDOW_COVERING, COMMAND_PAUSE)
 }
 
+def presetPosition() {
+	setLevel(preset ?: 50)
+}
+
 /**
  * PING is used by Device-Watch in attempt to reach the Device
  * */
@@ -186,6 +213,10 @@ def refresh() {
 		cmds = zigbee.readAttribute(zigbee.LEVEL_CONTROL_CLUSTER, ATTRIBUTE_CURRENT_LEVEL)
 	}
 	return cmds
+}
+
+def installed() {
+	sendEvent(name: "supportedWindowShadeCommands", value: JsonOutput.toJson(["open", "close", "pause"]), displayed: false)
 }
 
 def configure() {
@@ -205,11 +236,15 @@ def configure() {
 		cmds += readDeviceBindingTable()
 	}
 
+	if (reportsBatteryPercentage()) {
+		cmds += zigbee.configureReporting(zigbee.POWER_CONFIGURATION_CLUSTER, BATTERY_PERCENTAGE_REMAINING, DataType.UINT8, 30, 21600, 0x01)
+	}
+
 	return refresh() + cmds
 }
 
 def usesLocalGroupBinding() {
-	isIkeaKadrilj()
+	isIkeaKadrilj() || isIkeaFyrtur()
 }
 
 private def parseBindingTableMessage(description) {
@@ -237,9 +272,21 @@ private List readDeviceBindingTable() {
 }
 
 def shouldInvertLiftPercentage() {
-	return isIkeaKadrilj()
+	return isIkeaKadrilj() || isIkeaFyrtur() || isSomfyGlydea()
+}
+
+def reportsBatteryPercentage() {
+	return isIkeaKadrilj() || isIkeaFyrtur()
 }
 
 def isIkeaKadrilj() {
 	device.getDataValue("model") == "KADRILJ roller blind"
+}
+
+def isIkeaFyrtur() {
+	device.getDataValue("model") == "FYRTUR block-out roller blind"
+}
+
+def isSomfyGlydea() {
+	device.getDataValue("model") == "Glydea Somfy"
 }
